@@ -1,0 +1,10 @@
+[package]
+name = "market_protocol"
+description = "行情数据在管道间传输的 wire protocol：统一消息类型 + JSON 序列化/反序列化 + 传输帧约定"
+edition.workspace = true
+version.workspace = true
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
