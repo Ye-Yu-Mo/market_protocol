@@ -1,9 +1,14 @@
 [package]
 name = "market_protocol"
-description = "行情数据在管道间传输的 wire protocol：统一消息类型 + JSON 序列化/反序列化 + 传输帧约定"
-edition.workspace = true
-version.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Wire protocol for market data streaming: unified message types, forward-compatible JSON ser/de, and WebSocket frame conventions"
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/Ye-Yu-Mo/market_protocol"
+keywords = ["trading", "market-data", "quotes", "websocket", "wire-protocol"]
+categories = ["finance"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
