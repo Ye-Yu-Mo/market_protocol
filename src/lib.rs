@@ -12,8 +12,13 @@
 //!
 //! 详细说明见 [`types`](crate::types) 模块文档。
 
+pub mod frame;
 pub mod message;
+// `trait` 是关键字，模块文件仍是 `src/trait.rs`。
+pub mod r#trait;
 pub mod types;
+
+pub use r#trait::Message;
 
 use serde::{Deserialize, Serialize};
 
