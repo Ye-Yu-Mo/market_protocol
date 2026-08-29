@@ -12,6 +12,7 @@
 //!
 //! 详细说明见 [`types`](crate::types) 模块文档。
 
+pub mod message;
 pub mod types;
 
 use serde::{Deserialize, Serialize};
