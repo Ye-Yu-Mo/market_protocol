@@ -119,6 +119,34 @@ uv run python scripts/generate_python.py
 
 运行环境只需要 `protobuf` runtime，不需要安装 `protoc`。
 
+## 历史行情服务协议
+
+`market_protocol` 只定义历史服务的 Binary message，不连接数据库。`market_data`
+负责从 `market_v2.duckdb`、`free-stockdb` 读取和标准化数据，再使用这些 generated types
+对外提供历史行情服务。
+
+```python
+from market_protocol.v1 import market_protocol_pb2 as pb
+
+request = pb.HistoryRequest(
+    request_id="req-1",
+    symbols=[pb.Symbol(market=pb.MARKET_A, code="000001")],
+    period=pb.PERIOD_D1,
+    start_date="2026-01-01",
+    end_date="2026-01-31",
+    adjustment=pb.ADJUSTMENT_RAW,
+    page_size=500,
+)
+wire = pb.TransportFrame(history_request=request).SerializeToString()
+```
+
+服务端返回 `HistoryResponse`，其中 `HistoryChunk.records` 复用同一个 `Kline` 数据模型；
+`trade_date` 保留离线交易日的精确日历键，`next_page_token` 用于分页，`snapshot_id`
+用于标识本次数据快照。请求不携带底层数据库名称，数据源选择由 `market_data` 内部负责。
+
+`Adjustment` 必须显式指定 `raw`、`qfq` 或 `hfq`。特别是 `free-stockdb` 的 SDK 默认
+返回前复权数据，adapter 不得把默认值伪装成原始行情。
+
 ## 示例
 
 ```bash

@@ -174,6 +174,40 @@
 - 将 `market_data` 的 offline bridge 或数据质量流程加入本仓库会重新制造职责耦合。
 - 如果迁移过程中同时发送 JSON 和 Binary，会造成重复行情和错误去重。
 
+### Milestone 4: 历史行情服务协议
+
+#### 目标
+
+- 在不暴露 `market_v2.duckdb` 或 `free-stockdb` 内部结构的前提下，为统一历史行情服务定义 Protobuf request/response。
+- 让在线和离线数据继续复用 `Quote`、`Tick`、`Kline`、`QuoteSnapshot`，只增加查询、分页、快照和复权元数据。
+
+#### 交付物
+
+- `Adjustment` enum：`RAW`、`QFQ`、`HFQ`。
+- `HistoryRequest`：request id、标的列表、周期、明确的交易日期范围、复权方式、分页大小和 page token。
+- `HistoryRecord`：`Symbol`、精确 `trade_date` 和现有 `Kline`。
+- `HistoryChunk`：records、next page token、完成标记、snapshot id 和实际复权方式。
+- `HistoryError` 与 `HistoryResponse.oneof`。
+- `TransportFrame` 的历史请求/响应分支（如果服务采用统一 Binary frame）。
+- Rust/Python generated types、共享 Binary fixture、presence/分页/错误测试和服务边界文档。
+
+#### 验收标准
+
+- Rust 和 Python 可以从同一 `.proto` 生成并编解码历史 request、chunk 和 error。
+- `trade_date`、snapshot id、adjustment、page token、end 和 request id 往返不丢失。
+- `market_data` 的两个 source adapter 都可以映射到同一个 `HistoryRecord`，协议不出现 `MarketV2Kline` 或 `FreeStockDbKline`。
+- `free-stockdb` 的默认 qfq 行为不会被误当成 raw；复权方式必须显式传递。
+- 历史协议不依赖 DuckDB、free-stockdb SDK 或任何 source-specific runtime。
+
+#### 风险
+
+- 两个源的日期格式、复权默认值、缺失值和周期聚合规则不同，不能直接拼接。
+- 一次返回全部历史数据会造成内存和网络压力，必须支持分页或 chunk。
+- `market_v2` 的辅助表（复权因子、资金流、融资融券、财务数据）不能强行塞进 Kline；有真实消费者后再定义独立 dataset。
+- 历史服务的网络实现属于 `market_data`，不能把数据库访问或服务状态塞进 `market_protocol`。
+
+---
+
 ## 兼容性检查
 
 - **必须保持的行为**：`fbb3b22` 四种行情的字段语义、时间戳毫秒单位、成交量/金额单位、前导零代码、Period、盘口空数组和 Tick serial。
