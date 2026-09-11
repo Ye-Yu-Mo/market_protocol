@@ -1,89 +1,115 @@
-# M4 spider 接入点
+# Protobuf producer 接入
 
-本文档给 `stock_a_spider`（以及后续台股 spider）的接入者看：行情源解析后如何
-构造 `MarketMessage`、序列化并按帧推送到 webserver。
+本文档说明行情 producer 如何使用 `market_protocol` 的 generated Protobuf 类型。旧 JSON producer 已删除，不是兼容路径。
 
-## 1. 构造 `MarketMessage`
+## 1. 构造行情消息
 
-协议层统一 envelope：
+所有消息来自：
 
-```json
-{
-  "type": "quote",
-  "symbol": {"market": "A", "code": "560010"},
-  "data": { "ts": 1787904896000, "...": "..." }
-}
+```text
+proto/market_protocol/v1/market_protocol.proto
 ```
 
-Rust 侧构造：
+Rust producer 直接构造 generated 类型：
 
 ```rust
-use market_protocol::{Market, Symbol};
-use market_protocol::message::MarketMessage;
-use market_protocol::types::Quote;
+use market_protocol::v1;
 
-let msg = MarketMessage::Quote {
-    symbol: Symbol::new(Market::A, "560010"),
-    data: Quote { /* 见 src/types.rs */ },
+let frame = v1::TransportFrame {
+    payload: Some(v1::transport_frame::Payload::Market(
+        v1::MarketEnvelope {
+            symbol: Some(v1::Symbol {
+                market: Some(v1::Market::A as i32),
+                code: Some("560010".to_owned()),
+            }),
+            payload: Some(v1::market_envelope::Payload::Quote(v1::Quote {
+                ts: Some(1_787_904_896_000),
+                price: Some(3.208),
+                open: Some(3.211),
+                high: Some(3.245),
+                low: Some(3.204),
+                pre_close: Some(3.220),
+                volume: Some(132_886_000.0),
+                amount: Some(428_272_326.0),
+                in_vol: Some(69_090_700.0),
+                out_vol: Some(63_795_300.0),
+            })),
+        },
+    )),
 };
 ```
 
-- `type` 只能是 `quote` / `tick` / `kline` / `quote_snapshot`。
-- `symbol.market` 是 `A` / `Tw` / `Crypto`（Crypto 本阶段只预留）。
-- 序列化用 `serde_json::to_string(&msg)`，不要手工拼 JSON。
+Python producer 使用 `market_protocol.v1.market_protocol_pb2` 中的同名 generated 类型。
 
-## 2. 单位换算约定
+## 2. 单位与时间
 
-- **volume 协议单位统一为“股”**。
-  - 腾讯 A 股 `手`：`股 = 手 × 100`。
-  - 台股若源给“千股/张”，同样先换算成股。
-  - crypto 小数份额直接按原值进 `f64`，协议不表达整手。
-- **amount 协议单位统一为“元”**。
-- 其他源字段若为 `Option<T>`，源没有时给 `None`；不要填 0 冒充真实值。
+- `ts` 使用 epoch milliseconds；
+- `volume` 使用股；
+- `amount` 使用元；
+- 股票代码始终使用字符串，保留前导零；
+- 来源格式和来源单位必须在 producer 的 source adapter 中转换，不能写入协议层。
 
-## 3. 时间格式 → epoch 毫秒
+## 3. Tick 游标
 
-协议时间戳一律是 **epoch 毫秒 `i64`**。
+`Tick.serial` 是同一标的交易日内的单调游标：
 
-| 源格式 | 转换约定 |
-|---|---|
-| Unix 秒 | `× 1000` |
-| `yyyy/MM/dd HH:mm:ss` | 按源时区解析后转 epoch ms |
-| 8/14 位整数（free-stockdb） | 按源说明补足到 epoch ms |
-| `YYYY-MM-DD`（FinMind） | 解析为当天 0 点 epoch ms |
+- 同一秒的多笔成交依靠 `serial` 区分；
+- `serial = -1` 表示来源清盘/恢复；
+- producer 必须按 `(ts, serial)` 顺序发送；
+- resume 的实际存储和重放由消费服务负责，本 crate 不提供持久化。
 
-不要让协议层出现 `"2024-..."` 字符串或秒级时间戳。
+## 4. 发送 Binary frame
 
-## 4. Tick 必须维护 `serial` 单调递增
+使用 `prost::Message` 直接编码：
 
-`Tick.serial` 是断线续推游标：
+```rust
+use prost::Message;
 
-- 同一标的、同一交易日的 Tick `serial` 必须严格单调递增。
-- 同一秒多笔成交的 `ts` 可能相同，靠 `serial` 区分，不能丢。
-- `serial = -1` 是清盘/恢复语义，按源约定使用。
-- 服务器按 `(ts, serial)` 双键续推，任何 serial 回退都会造成重复/缺口。
-
-## 5. 推送到 webserver
-
-spider 侧每构造一条 `MarketMessage`，就序列化成一行 JSON，作为 WS text frame
-发送：
-
-```text
-{"type":"quote","symbol":{"market":"A","code":"560010"},"data":{...}}
-{"type":"tick","symbol":{"market":"Tw","code":"2330"},"data":{...}}
+let bytes = frame.encode_to_vec();
+// 将 bytes 作为 WebSocket Binary message 发送。
 ```
 
-- 不要发送 heartbeat / resume 帧：这些是 webserver 和客户端之间的控制帧，
-  spider 只发消息帧。
-- 推荐按 `(ts, serial)` 全序发送：同一 `ts` 内，Quote/Kline/QuoteSnapshot
-  先发，Tick 按 `serial` 递增后发。若无法保证，webserver 侧续推会以幂等
-  重推同 `ts` 非 Tick 来兜底，但不应依赖这种兜底。
-- 连接断开后 spider 按业务决定重连；行情游标续推由 webserver 对订阅者负责，
-  spider 不需要自己实现 resume。
+不要：
 
-## 6. 最小可运行示例
+- 先把消息转 JSON；
+- 手工拼 Protobuf bytes；
+- 把 `TransportFrame` 转成字符串；
+- 同时发送同一事件的 JSON 和 Binary 两份。
+
+## 5. 控制帧
+
+heartbeat 和 resume 也是 `TransportFrame` 的 Protobuf oneof：
+
+```rust
+let heartbeat = v1::TransportFrame {
+    payload: Some(v1::transport_frame::Payload::Heartbeat(v1::Heartbeat {})),
+};
+
+let resume = v1::TransportFrame {
+    payload: Some(v1::transport_frame::Payload::Resume(v1::Resume {
+        since_ts: Some(123),
+        since_serial: Some(456),
+    })),
+};
+```
+
+producer 只发送业务数据；heartbeat/resume 的方向和生命周期由 WebSocket 服务负责。
+
+## 6. Python 生成代码
 
 ```bash
-cargo run --example mock_spider
-cargo run --example mock_spider | cargo run --example mock_webserver
+uv sync --locked
+uv run python scripts/generate_python.py
 ```
+
+运行时只需要 `protobuf`，不需要安装 `protoc`。生成脚本和 generated module 必须始终以仓库内 `.proto` 为输入。
+
+## 7. 能力边界
+
+本协议只定义消息结构和 Binary 编码，不实现：
+
+- 真实 WebSocket 客户端或服务端；
+- 鉴权、订阅隔离和连接管理；
+- ACK、outbox、持久化和可靠重放；
+- 数据源访问、质量门禁和离线存储；
+- 交易执行。

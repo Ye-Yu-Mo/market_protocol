@@ -1,108 +1,154 @@
 # market_protocol
 
-[![CI](https://github.com/Ye-Yu-Mo/market_protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/Ye-Yu-Mo/market_protocol/actions/workflows/ci.yml)
-
-行情数据在 `spider → market_webserver → factor_maker / frontend` 管道间传输的 **wire protocol**：
-统一消息类型 + JSON 序列化/反序列化（前向兼容）+ WS 传输帧约定。
-
-协议写成代码（crate）而非文档，消费方**编译期共享**同一份类型与 ser/de，从根上杜绝字段命名、时间格式、价格精度的各自为政。
+`market_protocol` 是行情数据的 **Protobuf-only wire protocol**。协议模型只维护一份：
 
 ```text
-spider ──market_protocol (JSON over WS)──▶ market_webserver ──▶ factor_maker / frontend
+proto/market_protocol/v1/market_protocol.proto
+        ├── Rust prost generated types
+        └── Python protobuf generated module
 ```
 
-## 协议契约
+不保留 JSON data frame、JSON control frame 或 JSON 兼容层。Rust 和 Python 消费方直接使用 generated Protobuf types；`market_data` 的离线数据标准化和存储由其自身项目负责。
 
-- **时间戳**：所有消息的 `ts` 统一为 **epoch 毫秒 `i64`**。源格式（元大 `yyyy/MM/dd`、free-stockdb 8/14 位整数、FinMind `YYYY-MM-DD`）一律在 spider 层转换，协议层无时区/格式歧义。
-- **量单位**：`volume` 统一以「股」为单位；`amount` 为「元」。腾讯"手"×100、元大期货"千股"等源单位由 spider 换算。
-- **envelope**：`{"type":"quote","symbol":{"market":"A","code":"560010"},"data":{...}}`——**顶层无 `ts`**（`ts` 属于 data）；`type` / `symbol` / `data` 字段名自 M2 起不可改。
-- **前向兼容**：未知字段容忍 + 新增字段必须 `Option` / `#[serde(default)]` + 未知 `type` fail loud（不静默误解析）。
+## 协议消息
 
-## 消息类型
+当前只包含 Protobuf 开发前已经存在的四种行情消息：
 
-| 类型 | `type` 标签 | 说明 |
-|---|---|---|
-| `Quote` | `quote` | 最新成交快照（price / OHLC / volume / amount / 内外盘） |
-| `Tick` | `tick` | 逐笔成交（含 `serial` 断线续推游标） |
-| `Kline` | `kline` | OHLCV + `period` + 离线字段（`amount` / `turnover` / `pre_close`） |
-| `QuoteSnapshot` | `quote_snapshot` | 盘口五档（档数由源决定） |
+| Message | 用途 |
+|---|---|
+| `Quote` | 最新成交快照 |
+| `Tick` | 逐笔成交，`serial` 用于游标 |
+| `Kline` | OHLCV 与周期 |
+| `QuoteSnapshot` | 盘口档位 |
 
-三市场差异（A 股整手 100、台股繁体编码、crypto 小数份额）用字段表达，不造理论子类型。
+传输控制消息：
 
-## 快速开始
+| Message | 用途 |
+|---|---|
+| `Heartbeat` | 连接保活 |
+| `Resume` | 按 `(since_ts, since_serial)` 请求续推 |
+
+`MarketEnvelope` 使用 `oneof` 携带四种行情消息，`TransportFrame` 使用 `oneof` 区分行情、heartbeat 和 resume。
+
+## 协议约定
+
+- `ts`：epoch milliseconds，`int64`；
+- `volume`：股；
+- `amount`：元；
+- `Symbol.code`：字符串，保留股票代码前导零；
+- `Period` enum 数值固定，业务周期为 `1m`、`5m`、`15m`、`30m`、`60m`、`1d`、`1w`、`1M`；
+- 需要区分缺失和零值的字段使用 `proto3 optional`；
+- 已发布 field number 和 enum number 不得复用；删除字段必须使用 `reserved`。
+
+Protobuf bytes 是单个 `TransportFrame`，不经过 JSON。未知字段按 protobuf runtime 的兼容规则处理；缺失 payload、损坏 wire、非法 varint 等输入必须由消费者拒绝。
+
+## Rust
+
+Rust 类型由 `build.rs` 在构建时从 `.proto` 生成：
 
 ```rust
-use market_protocol::message::MarketMessage;
-use market_protocol::types::Quote;
-use market_protocol::{Market, Symbol};
+use market_protocol::v1;
+use prost::Message;
 
-// 构造一条真实样本消息（A 股 560010，腾讯实测报价）。
-let msg = MarketMessage::Quote {
-    symbol: Symbol::new(Market::A, "560010"),
-    data: Quote {
-        ts: 1_787_904_896_000,     // epoch 毫秒
-        price: 3.208,
-        open: 3.211,
-        high: 3.245,
-        low: 3.204,
-        pre_close: 3.220,
-        volume: 132_886_000.0,     // 股（腾讯"手"已 ×100）
-        amount: 428_272_326.0,     // 元
-        in_vol: Some(69_090_700.0),
-        out_vol: Some(63_795_300.0),
-    },
+let quote = v1::Quote {
+    ts: Some(1_787_904_896_000),
+    price: Some(3.208),
+    open: Some(3.211),
+    high: Some(3.245),
+    low: Some(3.204),
+    pre_close: Some(3.220),
+    volume: Some(132_886_000.0),
+    amount: Some(428_272_326.0),
+    in_vol: Some(69_090_700.0),
+    out_vol: Some(63_795_300.0),
+};
+```
+
+完整 envelope：
+
+```rust
+use market_protocol::v1;
+use prost::Message;
+
+let frame = v1::TransportFrame {
+    payload: Some(v1::transport_frame::Payload::Market(
+        v1::MarketEnvelope {
+            symbol: Some(v1::Symbol {
+                market: Some(v1::Market::A as i32),
+                code: Some("560010".to_owned()),
+            }),
+            payload: Some(v1::market_envelope::Payload::Quote(quote)),
+        },
+    )),
 };
 
-let json = serde_json::to_string(&msg)?;
-// {"type":"quote","symbol":{"market":"A","code":"560010"},"data":{"ts":...,"price":3.208,...}}
-
-let parsed: MarketMessage = serde_json::from_str(&json)?;
-println!("kind={} symbol={:?} ts={}", parsed.kind(), parsed.symbol(), parsed.timestamp());
+let bytes = frame.encode_to_vec();
+let decoded = v1::TransportFrame::decode(bytes.as_slice())?;
 ```
 
-`kind()` / `symbol()` / `timestamp()` 来自 [`Message`] trait，消费方可用 `&dyn Message` 统一处理任意消息。
+## Python
 
-## 传输帧约定
+Python generated module 位于 `python/market_protocol/v1/market_protocol_pb2.py`：
 
-| 帧 | 格式 | 方向 |
-|---|---|---|
-| 消息帧 | `MarketMessage` JSON | spider → webserver |
-| heartbeat | `{"type":"heartbeat"}` | webserver → 客户端（间隔可配置，默认 15s） |
-| resume | `{"type":"resume","since_ts":...,"since_serial":...}` | 客户端 → webserver（断线重连续推） |
+```python
+from market_protocol.v1 import market_protocol_pb2 as pb
 
-断线续推按 `(ts, serial)` 双键游标：`Tick` 精确定位（同一秒多笔成交靠 `serial` 不丢不重），快照类消息（Quote/QuoteSnapshot）允许 ts 粒度幂等重推，`Kline` 按 `ts` 去重。**服务器必须按 `(ts, serial)` 全序推送**（非 Tick 视为 `(ts, 0)`），否则游标后的同 `ts` 非 Tick 可能成为缺口。
+frame = pb.TransportFrame(
+    market=pb.MarketEnvelope(
+        symbol=pb.Symbol(market=pb.MARKET_A, code="560010"),
+        quote=pb.Quote(
+            ts=1_787_904_896_000,
+            price=3.208,
+            volume=132_886_000.0,
+            amount=428_272_326.0,
+        ),
+    ),
+)
 
-```rust
-use market_protocol::frame::{heartbeat_json, is_control_frame, resume_json};
-
-assert_eq!(is_control_frame(&heartbeat_json()), Some("heartbeat"));
-assert_eq!(is_control_frame(&resume_json(123, 456)), Some("resume"));
+wire = frame.SerializeToString()
+parsed = pb.TransportFrame.FromString(wire)
+assert parsed.market.quote.HasField("price")
 ```
+
+生成 Python module：
+
+```bash
+uv sync --locked
+uv run python scripts/generate_python.py
+```
+
+运行环境只需要 `protobuf` runtime，不需要安装 `protoc`。
 
 ## 示例
 
 ```bash
-cargo run --example to_json          # 序列化真实样本 envelope
-cargo run --example from_json        # 解析真实样本 JSON
-cargo run --example mock_spider      # 产出样本帧流
-cargo run --example mock_webserver   # 收帧、分拣、fan-out 到两个订阅者
-cargo run --example mock_spider | cargo run --example mock_webserver  # 管道串联
+cargo run --example to_binary | xargs cargo run --example from_binary
 ```
 
-## 开发
+两个示例都直接使用 generated `TransportFrame`，没有 JSON 中间层。
+
+## 开发检查
 
 ```bash
+python3 scripts/check_proto_schema.py
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 cargo doc --no-deps
+uv run python scripts/generate_python.py
+uv run pytest -q
 ```
 
-## 文档
+## 项目边界
 
-- `docs/spider-integration.md` — M4 spider 接入点
-- `docs/webserver-integration.md` — M6 webserver 接入点
-- `CHANGELOG.md` — 变更记录
+本仓库只负责 `.proto`、Rust/Python generated protocol types、Binary 编解码和 wire contract。不负责：
+
+- 数据源访问和字段标准化；
+- quality gate、Parquet/DuckDB、manifest、快照发布；
+- 真实 WebSocket server、鉴权和订阅管理；
+- ACK、outbox、可靠重放和交易执行。
+
+这些工作由对应项目维护，不能反向增加本仓库的第二套数据模型。
 
 ## License
 

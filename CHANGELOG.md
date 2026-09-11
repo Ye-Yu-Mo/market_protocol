@@ -16,6 +16,17 @@
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- 将协议收敛为 Protobuf-only：`.proto` 是唯一 schema，Rust/Python 使用 generated types。
+- 从 `fbb3b22` 的四种行情 JSON 语义提取 v1 Protobuf schema。
+- 删除旧 JSON 运行时、JSON 示例、JSON pipeline、订单扩展和重复 domain adapter。
+- heartbeat/resume 纳入 Protobuf `TransportFrame`，不再使用 JSON control frame。
+
+---
+
 ## [0.1.0] - 2026-08-29
 
 ### Added
