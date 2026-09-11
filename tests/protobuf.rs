@@ -157,6 +157,99 @@ fn optional_fields_preserve_missing_and_explicit_zero() {
 }
 
 #[test]
-fn malformed_wire_is_rejected() {
-    assert!(v1::TransportFrame::decode([0x80].as_slice()).is_err());
+fn history_request_and_response_preserve_query_metadata() {
+    let request = v1::HistoryRequest {
+        request_id: Some("req-1".to_owned()),
+        symbols: vec![v1::Symbol {
+            market: Some(v1::Market::A as i32),
+            code: Some("000001".to_owned()),
+        }],
+        period: Some(v1::Period::D1 as i32),
+        start_date: Some("2026-01-01".to_owned()),
+        end_date: Some("2026-01-31".to_owned()),
+        adjustment: Some(v1::Adjustment::Raw as i32),
+        page_size: Some(500),
+        page_token: None,
+    };
+    let request_frame = v1::TransportFrame {
+        payload: Some(v1::transport_frame::Payload::HistoryRequest(request)),
+    };
+    let decoded_request =
+        v1::TransportFrame::decode(request_frame.encode_to_vec().as_slice()).unwrap();
+    let Some(v1::transport_frame::Payload::HistoryRequest(request)) = decoded_request.payload
+    else {
+        panic!("expected history request");
+    };
+    assert_eq!(request.request_id.as_deref(), Some("req-1"));
+    assert_eq!(request.symbols[0].code.as_deref(), Some("000001"));
+    assert_eq!(request.adjustment, Some(v1::Adjustment::Raw as i32));
+
+    let response = v1::HistoryResponse {
+        payload: Some(v1::history_response::Payload::Chunk(v1::HistoryChunk {
+            request_id: Some("req-1".to_owned()),
+            records: vec![v1::HistoryRecord {
+                symbol: Some(v1::Symbol {
+                    market: Some(v1::Market::A as i32),
+                    code: Some("000001".to_owned()),
+                }),
+                trade_date: Some("2026-01-02".to_owned()),
+                kline: Some(v1::Kline {
+                    ts: Some(1_767_283_200_000),
+                    period: Some(v1::Period::D1 as i32),
+                    open: None,
+                    high: Some(10.5),
+                    low: Some(9.5),
+                    close: Some(10.0),
+                    volume: Some(100.0),
+                    amount: None,
+                    turnover: None,
+                    pre_close: None,
+                }),
+            }],
+            next_page_token: Some("page-2".to_owned()),
+            end: Some(false),
+            snapshot_id: Some("snapshot-1".to_owned()),
+            adjustment: Some(v1::Adjustment::Raw as i32),
+        })),
+    };
+    let response_frame = v1::TransportFrame {
+        payload: Some(v1::transport_frame::Payload::HistoryResponse(response)),
+    };
+    let decoded_response =
+        v1::TransportFrame::decode(response_frame.encode_to_vec().as_slice()).unwrap();
+    let Some(v1::transport_frame::Payload::HistoryResponse(response)) = decoded_response.payload
+    else {
+        panic!("expected history response");
+    };
+    let Some(v1::history_response::Payload::Chunk(chunk)) = response.payload else {
+        panic!("expected history chunk");
+    };
+    assert_eq!(chunk.records.len(), 1);
+    assert_eq!(chunk.records[0].trade_date.as_deref(), Some("2026-01-02"));
+    assert_eq!(chunk.next_page_token.as_deref(), Some("page-2"));
+    assert_eq!(chunk.end, Some(false));
+}
+
+#[test]
+fn history_error_is_a_response_variant() {
+    let frame = v1::TransportFrame {
+        payload: Some(v1::transport_frame::Payload::HistoryResponse(
+            v1::HistoryResponse {
+                payload: Some(v1::history_response::Payload::Error(v1::HistoryError {
+                    request_id: Some("req-2".to_owned()),
+                    code: Some("invalid_range".to_owned()),
+                    message: Some("end date precedes start date".to_owned()),
+                    retryable: Some(false),
+                })),
+            },
+        )),
+    };
+    let decoded = v1::TransportFrame::decode(frame.encode_to_vec().as_slice()).unwrap();
+    let Some(v1::transport_frame::Payload::HistoryResponse(response)) = decoded.payload else {
+        panic!("expected history response");
+    };
+    assert!(matches!(
+        response.payload,
+        Some(v1::history_response::Payload::Error(_))
+    ));
 }

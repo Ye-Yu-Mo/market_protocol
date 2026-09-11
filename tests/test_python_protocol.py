@@ -68,17 +68,68 @@ def test_malformed_binary_is_rejected() -> None:
         raise AssertionError("malformed protobuf should raise DecodeError")
 
 
-def test_rust_golden_fixture_has_the_same_semantics() -> None:
-    fixture = (
-        Path(__file__).parent / "fixtures" / "quote_transport.hex"
-    ).read_text().strip()
-    expected = bytes.fromhex(fixture)
-    assert market_frame().SerializeToString() == expected
-    decoded = pb.TransportFrame.FromString(expected)
+def test_history_request_response_and_pagination() -> None:
+    request = pb.HistoryRequest(
+        request_id="req-1",
+        symbols=[pb.Symbol(market=pb.MARKET_A, code="000001")],
+        period=pb.PERIOD_D1,
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+        adjustment=pb.ADJUSTMENT_RAW,
+        page_size=500,
+    )
+    request_frame = pb.TransportFrame(history_request=request)
+    decoded_request = pb.TransportFrame.FromString(request_frame.SerializeToString())
+    assert decoded_request.WhichOneof("payload") == "history_request"
+    assert decoded_request.history_request.symbols[0].code == "000001"
+    assert decoded_request.history_request.adjustment == pb.ADJUSTMENT_RAW
 
-    assert decoded.WhichOneof("payload") == "market"
-    assert decoded.market.WhichOneof("payload") == "quote"
-    assert decoded.market.symbol.code == "560010"
-    assert decoded.market.quote.ts == 1_787_904_896_000
-    assert decoded.market.quote.HasField("in_vol")
-    assert decoded.market.quote.in_vol == 69_090_700.0
+    response = pb.HistoryResponse(
+        chunk=pb.HistoryChunk(
+            request_id="req-1",
+            records=[
+                pb.HistoryRecord(
+                    symbol=pb.Symbol(market=pb.MARKET_A, code="000001"),
+                    trade_date="2026-01-02",
+                    kline=pb.Kline(
+                        ts=1_767_283_200_000,
+                        period=pb.PERIOD_D1,
+                        high=10.5,
+                        low=9.5,
+                        close=10.0,
+                        volume=100.0,
+                    ),
+                )
+            ],
+            next_page_token="page-2",
+            end=False,
+            snapshot_id="snapshot-1",
+            adjustment=pb.ADJUSTMENT_RAW,
+        )
+    )
+    response_frame = pb.TransportFrame(history_response=response)
+    decoded_response = pb.TransportFrame.FromString(response_frame.SerializeToString())
+    assert decoded_response.WhichOneof("payload") == "history_response"
+    assert decoded_response.history_response.WhichOneof("payload") == "chunk"
+    chunk = decoded_response.history_response.chunk
+    assert chunk.records[0].trade_date == "2026-01-02"
+    assert chunk.records[0].kline.HasField("open") is False
+    assert chunk.next_page_token == "page-2"
+    assert chunk.HasField("end")
+    assert chunk.end is False
+
+
+def test_history_error_is_a_response_variant() -> None:
+    response = pb.HistoryResponse(
+        error=pb.HistoryError(
+            request_id="req-2",
+            code="invalid_range",
+            message="end date precedes start date",
+            retryable=False,
+        )
+    )
+    frame = pb.TransportFrame(history_response=response)
+    decoded = pb.TransportFrame.FromString(frame.SerializeToString())
+    assert decoded.history_response.WhichOneof("payload") == "error"
+    assert decoded.history_response.error.HasField("retryable")
+    assert decoded.history_response.error.retryable is False

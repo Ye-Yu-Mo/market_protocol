@@ -45,6 +45,28 @@ fn main() {
             "kind=resume since_ts={:?} since_serial={:?}",
             resume.since_ts, resume.since_serial
         ),
+        Some(v1::transport_frame::Payload::HistoryRequest(request)) => println!(
+            "kind=history_request request_id={:?} symbols={} period={:?}",
+            request.request_id,
+            request.symbols.len(),
+            request.period
+        ),
+        Some(v1::transport_frame::Payload::HistoryResponse(response)) => match response.payload {
+            Some(v1::history_response::Payload::Chunk(chunk)) => println!(
+                "kind=history_chunk request_id={:?} records={} end={:?}",
+                chunk.request_id,
+                chunk.records.len(),
+                chunk.end
+            ),
+            Some(v1::history_response::Payload::Error(error)) => println!(
+                "kind=history_error request_id={:?} code={:?}",
+                error.request_id, error.code
+            ),
+            None => {
+                eprintln!("history response has no payload");
+                std::process::exit(1);
+            }
+        },
         None => {
             eprintln!("binary frame has no payload");
             std::process::exit(1);

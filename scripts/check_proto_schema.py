@@ -27,6 +27,12 @@ EXPECTED_ENUMS = {
         "PERIOD_W1": 7,
         "PERIOD_MONTH_1": 8,
     },
+    "Adjustment": {
+        "ADJUSTMENT_UNSPECIFIED": 0,
+        "ADJUSTMENT_RAW": 1,
+        "ADJUSTMENT_QFQ": 2,
+        "ADJUSTMENT_HFQ": 3,
+    },
 }
 
 EXPECTED_FIELDS = {
@@ -69,7 +75,34 @@ EXPECTED_FIELDS = {
     "MarketEnvelope": {"symbol": 1, "quote": 2, "tick": 3, "kline": 4, "quote_snapshot": 5},
     "Heartbeat": {},
     "Resume": {"since_ts": 1, "since_serial": 2},
-    "TransportFrame": {"market": 1, "heartbeat": 2, "resume": 3},
+    "HistoryRequest": {
+        "request_id": 1,
+        "symbols": 2,
+        "period": 3,
+        "start_date": 4,
+        "end_date": 5,
+        "adjustment": 6,
+        "page_size": 7,
+        "page_token": 8,
+    },
+    "HistoryRecord": {"symbol": 1, "trade_date": 2, "kline": 3},
+    "HistoryChunk": {
+        "request_id": 1,
+        "records": 2,
+        "next_page_token": 3,
+        "end": 4,
+        "snapshot_id": 5,
+        "adjustment": 6,
+    },
+    "HistoryError": {"request_id": 1, "code": 2, "message": 3, "retryable": 4},
+    "HistoryResponse": {"chunk": 1, "error": 2},
+    "TransportFrame": {
+        "market": 1,
+        "heartbeat": 2,
+        "resume": 3,
+        "history_request": 4,
+        "history_response": 5,
+    },
 }
 
 EXPECTED_OPTIONAL = {
@@ -85,6 +118,12 @@ EXPECTED_OPTIONAL = {
     "QuoteSnapshot": {"ts"},
     "MarketEnvelope": {"symbol"},
     "Resume": {"since_ts", "since_serial"},
+    "HistoryRequest": {
+        "request_id", "period", "start_date", "end_date", "adjustment", "page_size", "page_token"
+    },
+    "HistoryRecord": {"symbol", "trade_date", "kline"},
+    "HistoryChunk": {"request_id", "next_page_token", "end", "snapshot_id", "adjustment"},
+    "HistoryError": {"request_id", "code", "message", "retryable"},
 }
 
 
@@ -176,8 +215,20 @@ def main() -> int:
             )
 
     for name, expected in {
-        "MarketEnvelope": {"quote": 2, "tick": 3, "kline": 4, "quote_snapshot": 5},
-        "TransportFrame": {"market": 1, "heartbeat": 2, "resume": 3},
+        "MarketEnvelope": {
+            "quote": 2,
+            "tick": 3,
+            "kline": 4,
+            "quote_snapshot": 5,
+        },
+        "HistoryResponse": {"chunk": 1, "error": 2},
+        "TransportFrame": {
+            "market": 1,
+            "heartbeat": 2,
+            "resume": 3,
+            "history_request": 4,
+            "history_response": 5,
+        },
     }.items():
         actual = oneof_fields(actual_messages.get(name, ""))
         if actual != expected:

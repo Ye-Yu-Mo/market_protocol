@@ -25,6 +25,13 @@ enum Period {
   PERIOD_MONTH_1 = 8;   // 1M
 }
 
+enum Adjustment {
+  ADJUSTMENT_UNSPECIFIED = 0;
+  ADJUSTMENT_RAW = 1;
+  ADJUSTMENT_QFQ = 2;
+  ADJUSTMENT_HFQ = 3;
+}
+
 message Symbol {
   optional Market market = 1;
   // Keep codes as strings so 000001 and 0050 retain leading zeroes.
@@ -101,11 +108,55 @@ message Resume {
   optional int64 since_serial = 2;
 }
 
+// A source-neutral historical market data query.
+// The service chooses the backing source; callers never depend on its tables.
+message HistoryRequest {
+  optional string request_id = 1;
+  repeated Symbol symbols = 2;
+  optional Period period = 3;
+  optional string start_date = 4; // YYYY-MM-DD, inclusive.
+  optional string end_date = 5;   // YYYY-MM-DD, inclusive.
+  optional Adjustment adjustment = 6;
+  optional uint32 page_size = 7;
+  optional string page_token = 8;
+}
+
+message HistoryRecord {
+  optional Symbol symbol = 1;
+  optional string trade_date = 2; // YYYY-MM-DD, the exact calendar key.
+  optional Kline kline = 3;
+}
+
+message HistoryChunk {
+  optional string request_id = 1;
+  repeated HistoryRecord records = 2;
+  optional string next_page_token = 3;
+  optional bool end = 4;
+  optional string snapshot_id = 5;
+  optional Adjustment adjustment = 6;
+}
+
+message HistoryError {
+  optional string request_id = 1;
+  optional string code = 2;
+  optional string message = 3;
+  optional bool retryable = 4;
+}
+
+message HistoryResponse {
+  oneof payload {
+    HistoryChunk chunk = 1;
+    HistoryError error = 2;
+  }
+}
+
 // The WebSocket payload boundary. Exactly one message kind is selected.
 message TransportFrame {
   oneof payload {
     MarketEnvelope market = 1;
     Heartbeat heartbeat = 2;
     Resume resume = 3;
+    HistoryRequest history_request = 4;
+    HistoryResponse history_response = 5;
   }
 }
