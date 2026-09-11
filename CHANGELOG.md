@@ -16,6 +16,21 @@
 
 ---
 
+## [0.3.0] - 2026-09-11
+
+### Added
+
+- 增加 `Adjustment`，显式区分原始、前复权和后复权数据。
+- 增加 `HistoryRequest`、`HistoryRecord`、`HistoryChunk`、`HistoryError` 和 `HistoryResponse`。
+- `TransportFrame` 增加历史行情请求/响应分支，支持 request id、日期范围、分页和 snapshot id。
+- 增加 Rust/Python 历史协议 round-trip、optional presence 和错误响应测试。
+
+### Changed
+
+- 历史服务协议复用 `Kline`，不暴露 `market_v2.duckdb` 或 `free-stockdb` 的内部表结构。
+
+---
+
 ## [0.2.0] - 2026-09-11
 
 ### Changed
