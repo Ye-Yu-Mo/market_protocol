@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package market_protocol.v1;
+
+// This schema is the single source of truth for the market wire protocol.
+// Field numbers and enum values are permanent once published.
+// A removed field must be reserved instead of being reused.
+
+enum Market {
+  MARKET_UNSPECIFIED = 0;
+  MARKET_A = 1;
+  MARKET_TW = 2;
+  MARKET_CRYPTO = 3;
+}
+
+enum Period {
+  PERIOD_UNSPECIFIED = 0;
+  PERIOD_M1 = 1;        // 1m
+  PERIOD_M5 = 2;        // 5m
+  PERIOD_M15 = 3;       // 15m
+  PERIOD_M30 = 4;       // 30m
+  PERIOD_M60 = 5;       // 60m
+  PERIOD_D1 = 6;        // 1d
+  PERIOD_W1 = 7;        // 1w
+  PERIOD_MONTH_1 = 8;   // 1M
+}
+
+message Symbol {
+  optional Market market = 1;
+  // Keep codes as strings so 000001 and 0050 retain leading zeroes.
+  optional string code = 2;
+}
+
+message Quote {
+  // All timestamps are epoch milliseconds.
+  optional int64 ts = 1;
+  optional double price = 2;
+  optional double open = 3;
+  optional double high = 4;
+  optional double low = 5;
+  optional double pre_close = 6;
+  // Volume is measured in shares; amount is measured in yuan.
+  optional double volume = 7;
+  optional double amount = 8;
+  optional double in_vol = 9;
+  optional double out_vol = 10;
+}
+
+message Tick {
+  optional int64 ts = 1;
+  optional double price = 2;
+  optional double volume = 3;
+  optional double buy_price = 4;
+  optional double sell_price = 5;
+  optional uint32 inout_flag = 6;
+  // Monotonic per-symbol cursor. -1 means source clear/recovery.
+  optional int64 serial = 7;
+}
+
+message Kline {
+  optional int64 ts = 1;
+  optional Period period = 2;
+  optional double open = 3;
+  optional double high = 4;
+  optional double low = 5;
+  optional double close = 6;
+  optional double volume = 7;
+  optional double amount = 8;
+  optional double turnover = 9;
+  optional double pre_close = 10;
+}
+
+message Level {
+  optional double price = 1;
+  optional double volume = 2;
+}
+
+message QuoteSnapshot {
+  optional int64 ts = 1;
+  repeated Level bids = 2;
+  repeated Level asks = 3;
+}
+
+// A market data payload. Exactly one payload must be selected.
+message MarketEnvelope {
+  optional Symbol symbol = 1;
+
+  oneof payload {
+    Quote quote = 2;
+    Tick tick = 3;
+    Kline kline = 4;
+    QuoteSnapshot quote_snapshot = 5;
+  }
+}
+
+// Transport control messages are binary Protobuf messages too.
+message Heartbeat {}
+
+message Resume {
+  optional int64 since_ts = 1;
+  optional int64 since_serial = 2;
+}
+
+// The WebSocket payload boundary. Exactly one message kind is selected.
+message TransportFrame {
+  oneof payload {
+    MarketEnvelope market = 1;
+    Heartbeat heartbeat = 2;
+    Resume resume = 3;
+  }
+}
