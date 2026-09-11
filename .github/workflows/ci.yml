@@ -10,8 +10,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
+  rust:
+    name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -40,3 +40,34 @@ jobs:
 
       - name: Build docs
         run: cargo doc --no-deps
+
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.5"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check schema
+        run: uv run python scripts/check_proto_schema.py
+
+      - name: Regenerate Python bindings
+        run: |
+          uv run python scripts/generate_python.py
+          git diff --exit-code -- python/market_protocol/v1/market_protocol_pb2.py
+
+      - name: Python tests
+        run: uv run pytest -q

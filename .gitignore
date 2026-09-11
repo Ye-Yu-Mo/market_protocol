@@ -1,2 +1,5 @@
 free-stockdb
 *.duckdb
+.venv/
+__pycache__/
+*.py[cod]
